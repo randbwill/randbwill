@@ -1,0 +1,11 @@
+# load the libraries needed for the recommendation system
+import spotipy
+from spotipy.oauth2 import SpotifyClientCredentials
+from spotipy.oauth2 import SpotifyOAuth # this not used in this notebook but it allows username authentication
+import pandas as pd
+import numpy as np
+import seaborn as sns
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.preprocessing import OneHotEncoder
