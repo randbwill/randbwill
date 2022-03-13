@@ -1,0 +1,95 @@
+#Load the needed libraries
+
+import aiohttp
+import pysmartthings
+import pandas as pd
+import time
+import datetime as dt
+import asyncio
+
+# define your token
+token='YOUR TOKEN HERE'
+
+#Define a function to pass device data for extraction
+async def extract(device_num):
+    """
+    Takes a smartThings device number as input
+    Extracts values and capabilities from the device and
+    returns the values as a dictionary and the capabilities as a list
+    """
+    async with aiohttp.ClientSession() as session:
+            api = pysmartthings.SmartThings(session, token)
+            devices = await api.devices()
+            device = devices[device_num]
+            await device.status.refresh()
+            status=device.status.values #collect the data in defaultdict for the current device status
+            cap=device.capabilities #collect capabilities
+            status_2=dict(status) #convert to a dictionary
+    return status_2,cap
+
+# Convert collected data to a pandas frame
+async def collect(device_num):
+    return_frame1={}
+    return_frame=pd.DataFrame(return_frame1)
+    time_stamp={}
+    time_frame=pd.DataFrame(time_stamp)
+    async with aiohttp.ClientSession() as session:
+            api = pysmartthings.SmartThings(session, token)
+            devices = await api.devices()
+            device = devices[device_num]
+            await device.status.refresh()
+            status=device.status.values #collect the data for the current device status
+            status_2=dict(status) #convert to a dictionary
+            t1=dt.datetime.now() #get timestamp
+            
+            if device_num==3: #Samsung Refridgerator
+                new_dict={'powerConsumption':status_2['powerConsumption']}
+                new_dict2=new_dict['powerConsumption']
+                time_stamp={'Time':t1}            
+                new_row=pd.DataFrame(new_dict2,index=[0])
+                new_time=pd.DataFrame(time_stamp, index=[0])
+
+                return_frame=pd.DataFrame(new_dict2,index=[0])
+                time_frame=pd.DataFrame(time_stamp, index=[0])
+               
+            if device_num==8: #Honeywell Thermostat
+                new_dict={'humidity': status_2['humidity'], 'temperature': status_2['temperature']}
+                new_row=pd.DataFrame(new_dict,index=[0])
+                time_stamp={'Time':t1}  
+                new_time=pd.DataFrame(time_stamp, index=[0])
+               
+                return_frame=pd.DataFrame(new_dict,index=[0])
+                time_frame=pd.DataFrame(time_stamp, index=[0])
+                
+    time_column=time_frame['Time']
+    return_frame=return_frame.join(time_column)
+    return return_frame
+
+async def record_data(device_num, timer=5, period=5):
+    return_frame1={}
+    return_frame=pd.DataFrame(return_frame1)
+    for i in range(period):
+        new_row=await collect(device_num)
+        if timer==0:
+            return_frame=pd.DataFrame(new_row,index=[0])
+        if timer>0:
+            return_frame=df=pd.concat([return_frame, new_row], ignore_index = True, axis = 0)
+        await asyncio.sleep(timer)
+        print("Period {} has been collected".format(i))
+    return return_frame
+
+
+# create event loop
+
+def execute_record(device_num):
+    loop=asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    result=loop.run_until_complete(record_data(device_num,period,timer))
+    return result
+device_num =int( input("Enter device number: "))
+period=int(input("Enter the number of collection periods: "))
+timer=int(input("Enter the legnth of a period in seconds: "))
+
+test= execute_record(device_num)
+print (test)
+test.to_csv('submission.csv', index=False)
