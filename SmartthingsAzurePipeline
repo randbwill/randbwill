@@ -1,0 +1,197 @@
+#Load the needed libraries
+
+import aiohttp
+import pysmartthings
+import pandas as pd
+import time
+import datetime as dt
+import asyncio
+# Libraries needed to compute thermal comfort using PMV method
+from pythermalcomfort.models import pmv
+from pythermalcomfort.utilities import v_relative, clo_dynamic
+from pythermalcomfort.utilities import met_typical_tasks
+from pythermalcomfort.utilities import clo_individual_garments
+# Azure appen libraries
+from azure.storage.blob import BlobServiceClient
+
+# define your SmartThings token
+token='[YOUR SMARTTHINGS TOKEN HERE]'
+
+#define azure tokens
+account_name="[YOUR STORAGE ACCOUNT NAME HERE]"
+account_key="[AZURE ACCOUNT KEY HERE]"
+container_name="[YOUR CONTINER HERE]"
+blob_name="[YOUR BLOB FILE HERE]"
+
+#Create Blob storage service clients
+blob_service = BlobServiceClient(account_url="https://storageaccountname.blob.core.windows.net/", credential=account_key)
+container_client = blob_service.get_container_client(container_name)
+blob_client=container_client.get_blob_client(blob_name)
+
+#Define a function to pass device data for extraction
+async def extract(device_num):
+    """
+    Takes a smartThings device number as input
+    Extracts values and capabilities from the device and
+    returns the values as a dictionary and the capabilities as a list
+    """
+    async with aiohttp.ClientSession() as session:
+            api = pysmartthings.SmartThings(session, token)
+            devices = await api.devices()
+            device = devices[device_num]
+            await device.status.refresh()
+            status=device.status.values #collect the data in defaultdict for the current device status
+            cap=device.capabilities #collect capabilities
+            status_2=dict(status) #convert to a dictionary
+    return status_2,cap
+
+#MRT=Air Temperature
+#Dry Bulb Temperature=Air Temperature
+#assume .5 clo - light clothing
+#assume met=1.2 for sedentary
+#assume .1 m/s air speed
+async def comfort(temp,humid):
+    """
+    Takes a Temperature in F and Realative Humidity as an input
+    Returns PMV comfort value.
+    
+    Thermal  sensation scale.
+    Score    Thermal Sensation
+    +3           Hot
+    +2           Warm
+    +1           Slightly warm
+    0            Neutral
+    1            Slightly cool
+    2            Cool
+    3            Cold
+    """
+    tbd=temp
+    tr=temp
+    rh=humid
+    v=.1
+    met=1.2
+    clo=.5
+    units="IP" #imperial units or SI for Internation System of Units
+    #Nothe the below functions are synchronous
+    # calculate relative air speed
+    v_r = v_relative(v=v, met=met)
+    # calculate dynamic clothing
+    clo_d = clo_dynamic(clo=clo, met=met)
+    results=pmv(tdb=tbd, tr=tr, vr=v_r, rh=rh, met=met, clo=clo_d, units=units)
+    return results
+
+async def extract(device_num):
+       token='4a207258-c685-4d96-99ba-95dc1d111140'
+       async with aiohttp.ClientSession() as session:
+              api = pysmartthings.SmartThings(session, token)
+              devices = await api.devices()
+              device = devices[device_num]
+              await device.status.refresh()
+              status=device.status.values #collect the data for the current device status
+              status_2=dict(status) #convert to a dictionary
+       return status_2
+    
+# Convert collected data to a pandas frame
+async def collect(device_num):
+    """
+    Takes a smartThings device number as input
+    Extracts values and capabilities from the device and
+    returns the values as a Pandas Dataframe
+    """
+    return_frame1={}
+    return_frame=pd.DataFrame(return_frame1)
+    time_stamp={}
+    time_frame=pd.DataFrame(time_stamp)
+    Cl=0
+    Cl2=0
+    async with aiohttp.ClientSession() as session:
+            api = pysmartthings.SmartThings(session, token)
+            devices = await api.devices()
+            device = devices[device_num]
+            await device.status.refresh()
+            status=device.status.values #collect the data for the current device status
+            status_2=dict(status) #convert to a dictionary
+            t1=dt.datetime.now() #get timestamp
+            status_3=await extract(10)
+            
+            if device_num==3: #Samsung Refridgerator
+                new_dict={'powerConsumption':status_2['powerConsumption']}
+                new_dict2=new_dict['powerConsumption']
+                time_stamp={'Time':t1}  
+                new_row=pd.DataFrame(new_dict2,index=[0])
+                new_time=pd.DataFrame(time_stamp, index=[0])
+                return_frame=pd.DataFrame(new_dict2,index=[0])
+                time_frame=pd.DataFrame(time_stamp, index=[0])
+               
+            if device_num==6: #Temperature sensors
+                new_dict={'humidity': status_2['humidity'], 'temperature': status_2['temperature'],'location':'upstairs'}
+                new_row=pd.DataFrame(new_dict,index=[0])
+                status_4={'humidity': status_3['humidity'], 'temperature': status_3['temperature'],'location':'downstairs'}
+                new_row2=pd.DataFrame(status_4,index=[0])
+                time_stamp={'Time':t1} 
+                humid=new_row.iloc[0]['humidity']
+                temp=new_row.iloc[0]['temperature']
+                humid1=new_row2.iloc[0]['humidity']
+                temp1=new_row2.iloc[0]['temperature']
+                Cl= await comfort(temp=temp,humid=humid)
+                Cl2= await comfort(temp=temp1,humid=humid1)
+                comfort_level={'PMV':Cl}
+                comfort_level2={'PMV':Cl2}
+                new_time=pd.DataFrame(time_stamp, index=[0])
+                
+                comfort_frame=pd.DataFrame(comfort_level, index=[0])
+                comfort_frame2=pd.DataFrame(comfort_level2, index=[0])
+                return_frame=pd.DataFrame(new_dict,index=[0])
+                return_frame2=pd.DataFrame(new_row2,index=[0])
+                time_frame=pd.DataFrame(time_stamp, index=[0])
+                time_frame2=pd.DataFrame(time_stamp, index=[0])
+                comfort_frame=pd.concat([comfort_frame,comfort_frame2],ignore_index = True, axis=0)
+                return_frame=pd.concat([return_frame,return_frame2],ignore_index = True, axis=0)
+                time_frame=pd.concat([time_frame,new_time],ignore_index = True, axis=0)
+                comfort_column=comfort_frame['PMV']
+                return_frame=return_frame.join(comfort_column) #add the PMV column
+                
+    time_column=time_frame['Time']
+    return_frame=return_frame.join(time_column) #Add the timestamp column
+    return return_frame
+
+async def record_data(device_num,period,timer):
+    """
+    Takes a smartThings device number, a time period between measurments, 
+    and the number of measurements
+    Extracts values from the device and
+    returns the values as an aggregated Pandas Dataframe
+    """
+    return_frame1={}
+    return_frame=pd.DataFrame(return_frame1)
+    for i in range(period):
+        new_row=await collect(device_num)
+        if i==0:
+            return_frame=pd.DataFrame(new_row,index=[0])
+            return_frame1=return_frame.to_csv(index=False)
+            append_data_to_blob(return_frame1)
+        if i>0:
+            # return_frame=pd.concat([return_frame, new_row], ignore_index = True, axis = 0)
+            # new_row_2=pd.DataFrame(new_row,index=[0])
+            return_csv=new_row.to_csv(index=False,header=False)
+            append_data_to_blob(return_csv)
+        await asyncio.sleep(timer)
+
+
+# create event loop
+
+def execute_record(device_num):
+    loop=asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(record_data(device_num,period,timer))
+
+device_num =int( input("Enter device number: "))
+period=int(input("Enter the number of collection periods: "))
+timer=int(input("Enter the legnth of a period in seconds: "))
+
+# Define Azure data appending function
+def append_data_to_blob(data):
+    blob_client.upload_blob(data, blob_type="AppendBlob")
+
+execute_record(device_num)
+print ("Collection Complete")
